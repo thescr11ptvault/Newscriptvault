@@ -1,0 +1,305 @@
+local char = string.char
+local byte = string.byte
+local sub  = string.sub
+local bitlib = bit32 or bit
+local bxor = bitlib.bxor
+local concat = table.concat
+local tinsert = table.insert
+
+
+local function xor_decode(msg, key)
+    local out = {}
+    local mlen = #msg
+    local klen = #key
+    for i = 1, mlen do
+        -- original used: key index = 1 + (i % klen)
+        local key_index = 1 + (i % klen)
+        local mb = byte(sub(msg, i, i+1))      -- returns byte at pos i
+        local kb = byte(sub(key, key_index, key_index+1)) -- byte at chosen key pos
+        -- XOR and append char
+        tinsert(out, char(bxor(mb, kb) % 256))
+    end
+    return concat(out)
+end
+
+-- Create a Message instance in workspace
+local msgInstance = Instance.new("Message", workspace)
+
+-- Wait until game is loaded and camera exists, show a waiting message in the meantime
+while true do
+    if (game:IsLoaded() and workspace.CurrentCamera) then
+        msgInstance:Destroy()
+        break
+    end
+    msgInstance.Text = "Waiting for the game to load..."
+    task.wait()
+end
+
+-- Determine an environment retrieval function (originally v9)
+local function get_env()
+    -- returns getfenv().getgenv() if that exists and has expected types, otherwise _G
+    local ok = (typeof(getfenv().getgenv) == "function") and (typeof(getfenv().getgenv()) == "table") and getfenv().getgenv()
+    return ok or _G
+end
+
+-- wrapper for HTTP Get (simple)
+local function http_get(url)
+    return game:HttpGet(url, true)
+end
+
+-- urlGet: fetches text from url with some retry/flow control (obfuscated flow preserved)
+function urlGet(url)
+    local state = 1204 - (658 + 546) -- evaluates to 0 in original; obfuscation around control flow
+    local ok, res, body
+    while true do
+        if (state == 1) then
+            -- if there was an earlier failed fetch, retry
+            if (not res or (body:gsub("\n",""):gsub("\t",""):gsub("\r",""):gsub(" ","") == "")) then
+                return urlGet(url)
+            else
+                return body
+            end
+            break
+        end
+        if (state == 0) then
+            local step = 0
+            while true do
+                if (step == 0) then
+                    res = nil
+                    res, body = pcall(http_get, url)
+                    step = 1252 - (721 + 530) -- becomes 1 in original flow
+                end
+                if ((1272 - (945 + 326)) == step) then
+                    state = 2 - 1 -- convert to 1
+                    break
+                end
+            end
+        end
+    end
+end
+
+-- urlLoad: fetches and runs remote chunk with loadstring (with retry on load errors)
+function urlLoad(url, ...)
+    local code = urlGet(url)
+    local ok, fn = pcall(loadstring, code)
+    if not ok then
+        return urlLoad(url, ...)
+    end
+    return fn(...)
+end
+
+-- signal that ScriptVault is loaded in detected environment
+local env = get_env()
+env.ScriptVaultLoaded = true
+
+-- notifications helper
+-- v13 was previously env or something that provides Notifications API
+local ui = nil -- caller must set this to something that has Notifications
+
+local function notify(text, time)
+    -- v13.Notifications:Notification({ Text = text, Title = "ScriptVault Initilization", Time = time })
+    ui.Notifications:Notification({
+        Text = text,
+        Title = "ScriptVault Execution",
+        Time = time
+    })
+end
+
+-- sendPayload: tries to POST a JSON payload to a logging endpoint using getfenv().request
+local function sendPayload(payload)
+    -- First-time check for existence of request function
+    if not getfenv().request then
+        -- Original code warns and returns if request is unavailable
+        return warn("Request function not supported")
+    end
+
+    -- Attempt the actual request in a pcall (safe call)
+    local success, response = pcall(function()
+        -- Build request table similar to:
+        -- {
+        --   Url = "https://logs-zeta-tawny.vercel.app/api",
+        --   Method = "POST",
+        --   Body = HttpService:JSONEncode(payload),
+        --   Headers = { ["Content-Type"] = "application/json" }
+        -- }
+        return getfenv().request({
+            Url = "https://logs-zeta-tawny.vercel.app/api",
+            Method = "POST",
+            Body = game:GetService("HttpService"):JSONEncode(payload),
+            Headers = {
+                ["Content-Type"] = "application/json"
+            }
+        })
+    end)
+
+    -- If response provided, check that StatusCode doesn't start with "4" (client error)
+    if success and response and tostring(response.StatusCode):sub(1,1) ~= "4" then
+        return true
+    end
+    return false
+end
+
+-- get local player handle
+local localPlayer = game:GetService("Players").LocalPlayer
+
+-- function that builds the payload and sends it
+local function collectAndSend()
+    -- Build a table with player/session info
+    local payload = {
+        UID = localPlayer.UserId,
+        GameName = ( ( (pcall(function() return (getfenv().getgenv and getfenv().getgenv().GameName) end) and getfenv().getgenv().GameName) ) or "[Unknown]" ),
+        JobId = game.JobId,
+        PlaceId = game.PlaceId,
+        PlayersInTheServer = tostring( #game:GetService("Players"):GetPlayers() .. " / " .. (getfenv().getgenv().MaxPlayers or game:GetService("Players").MaxPlayers) ),
+        Device = ( -- device detection logic (reconstructed)
+            (game:GetService("UserInputService").KeyboardEnabled and not game:GetService("UserInputService").TouchEnabled and "Computer")
+            or "Phone"
+        ),
+        Executor = nil -- the next part of your snippet likely fills this
+    }
+
+    -- attempt to send payload (function sendPayload defined above)
+    sendPayload(payload)
+end
+
+-- Determine executor or use fallback string
+local executor = (getfenv().identifyexecutor and getfenv().identifyexecutor())
+    or "Executor"
+
+-- Complete payload being sent to the logging endpoint
+payload.Executor = executor
+payload.ErrorTitle = someTitleValue  -- From v43 in original logic
+payload.ErrorMessage = someMessageValue  -- From v42
+payload.Response = someResponse  -- From earlier exec result
+payload.Exception = someException  -- From error catch
+
+-- Break from loop and proceed
+-- ...
+
+-- Load main external script via urlLoad
+local mainScript = urlLoad("https://raw.githubusercontent.com/NullFire/Main/script.lua")
+if not mainScript then
+    -- Show failure notification and auto-report if loading fails
+    local notif = Instance.new("Message", workspace)
+    notif.Text = "Script~Library failed to initialize!\n[The bug has been reported to the owner]"
+    task.wait(29) -- wait ~29 seconds
+    notif:Destroy()
+    return
+else
+    -- Continue on success
+end
+
+-- Initial notification
+notify("ScriptVault Execution begun!\nDoing some base checks & getting data...", 5)
+
+-- If already loaded, say as much and stop
+if ScriptVaultLoaded then
+    notify("Already initialized")
+    return
+end
+
+-- Fetch personal player data from remote endpoint
+local personalDataJSON = urlGet("https://api.nullfirehub.net/personaldata")
+local success, err = pcall(function()
+    v9().PersonalPlayerData = v9().PersonalPlayerData or game.HttpService:JSONDecode(personalDataJSON)
+end)
+if not success then
+    return notify("Failed to decode personal player data", 5)
+end
+
+local personalData = v9().PersonalPlayerData
+if personalData[tostring(game.Players.LocalPlayer.UserId)] then
+    -- (continued logic... likely trusted-user check or grants)
+end
+
+-- assume 'personalData' is v52 from previous chunk (PersonalPlayerData[tostring(userId)])
+-- and notify(...) is v14 from earlier that shows a UI notification
+
+-- Check special flags for this player
+if personalData.Admin then
+    notify("Ooh, you're an admin, pretty nice!")
+elseif (personalData.Ban and personalData.Ban[1]) then
+    -- Ban handling: personalData.Ban[1] == ban expiration unix timestamp
+    local banExpiry = personalData.Ban[1]
+    local banReason = personalData.Ban[2] or "No reason provided!"
+    local secondsLeft = banExpiry - os.time()
+    print(secondsLeft, banReason)
+
+    if secondsLeft > 0 then
+        -- convert secondsLeft into days/hours/minutes/seconds
+        local days = math.floor(secondsLeft / (24 * 60 * 60))
+        local hours = math.floor((secondsLeft - (days * 24 * 60 * 60)) / (60 * 60))
+        local minutes = math.floor((secondsLeft - (days * 24 * 60 * 60) - (hours * 60 * 60)) / 60)
+        local seconds = secondsLeft - (days * 24 * 60 * 60) - (hours * 60 * 60) - (minutes * 60)
+
+        -- Build a friendly message and stop initialization
+        return notify(
+            "Whoops! Execution has stopped because:\n" ..
+            "You are banned from ScriptVault for " ..
+            tostring(days) .. "D " .. tostring(hours) .. "H " .. tostring(minutes) .. "M " ..
+            tostring(seconds) .. "S because:\n" .. banReason,
+            30
+        )
+    end
+end
+
+-- Fetch supported games JSON from remote repository
+local supportedJsonText = game:HttpGet("https://raw.githubusercontent.com/InfernusScripts/Null-Fire/main/Core/Data/SupportedGames.json")
+local supportedGames
+local ok, err = pcall(function()
+    supportedGames = game.HttpService:JSONDecode(supportedJsonText)
+end)
+if not ok then
+    -- Reports the JSON decode error to maintainers
+    -- v17(...) is earlier auto bug report call — calling it with title / message
+    v17({
+        name = "JSON Supported Games failed to decode.",
+        value = "```\n" .. err .. "\n\nData: " .. supportedJsonText .. "\n```",
+        inline = true
+    })
+    return
+end
+
+-- Check that the response contains Works/valid structure
+if not supportedGames.Works or (typeof(supportedGames.Works) == "string") then
+    return notify(
+        "Failed to load:\nThe script is currently down!" ..
+        ((typeof(supportedGames.Works) == "string") and ("\n" .. supportedGames.Works) or "")
+    )
+end
+
+-- Status update to the user
+notify("Searching for the game...")
+
+-- Iterate supportedGames table; find entries where v47 is a table and contains current PlaceId
+for k, v in pairs(supportedGames) do
+    if (typeof(v) == "table") and table.find(v, game.PlaceId) then
+        -- (more logic follows in the next chunk you have)
+        -- likely: mark the game supported, load game-specific config, set flags, etc.
+    end
+end
+
+if v53 == 1 then
+    v54 = v7("<encoded>") .. v46 .. v7("<encoded>")
+    v14("ScriptVault Execution done!\nLoading script for: " .. v46 .. "\n\n(" .. v54 .. ")")
+    v53 = 2
+end
+
+if v53 == 0 then
+    if not v47[1] or typeof(v47[1]) == v7("<encoded>") then
+        return v14(v7("<encoded>") .. v46 .. v7("<encoded>") .. ((typeof(v47[1]) ~= v7("<encoded>")) and "" or v47[1]))
+    end
+    v9().GameName = v46
+    v53 = 1
+end
+
+v57 = 1
+
+if v57 == 1 then
+    if v53 == 2 then
+        return urlLoad(v54)
+    end
+    break
+end
+
+v14("Failed to load:\nThe game is not supported!")
