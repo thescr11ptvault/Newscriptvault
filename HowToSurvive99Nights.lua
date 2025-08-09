@@ -48,7 +48,7 @@ local DistanceForKillAura = 25
 local DistanceForAutoChopTree = 25
 Rayfield:Notify({
    Title = "Script Version",
-   Content = "V.0.19",
+   Content = "V1",
    Duration = 2.5,
    Image = "rewind",
 })
